@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🔐 Token 短码生成器 - PowerTech</title>
+<style>
+  body {
+    font-family: system-ui, sans-serif;
+    background: #0a0f1c;
+    color: #eaf0ff;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    margin: 0;
+  }
+  .container {
+    background: rgba(20,25,40,0.9);
+    padding: 2rem;
+    border-radius: 12px;
+    width: 100%;
+    max-width: 400px;
+    box-shadow: 0 0 20px rgba(77,106,255,0.3);
+  }
+  h1 {
+    font-size: 1.4rem;
+    text-align: center;
+    margin-bottom: 1rem;
+    color: #4d6aff;
+  }
+  input {
+    width: 100%;
+    padding: 0.6rem;
+    margin-bottom: 1rem;
+    border-radius: 6px;
+    border: none;
+    font-size: 1rem;
+  }
+  button {
+    width: 100%;
+    padding: 0.7rem;
+    font-size: 1rem;
+    border: none;
+    border-radius: 6px;
+    background-color: #4d6aff;
+    color: #fff;
+    cursor: pointer;
+  }
+  button:hover { background-color: #3b55d0; }
+  .result {
+    margin-top: 1rem;
+    background: rgba(255,255,255,0.1);
+    padding: 0.6rem;
+    border-radius: 6px;
+    text-align: center;
+    word-break: break-all;
+  }
+  .hidden {
+    display: none;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Token 短码生成器</h1>
+  <input type="text" id="uid" placeholder="输入 UID" />
+  <input type="text" id="file" placeholder="文件名 (可选)" />
+  <button id="genBtn">生成短码</button>
+  <div class="result hidden" id="resultBox">
+    短码: <span id="codeText"></span>
+  </div>
+</div>
+
+<script>
+const API_BASE = "/api/create-token"; // 直接使用你的 Worker API
+
+document.getElementById("genBtn").addEventListener("click", async () => {
+  const uid = document.getElementById("uid").value.trim();
+  const file = document.getElementById("file").value.trim();
+  if (!uid) return alert("请填写 UID");
+
+  try {
+    const resp = await fetch(API_BASE, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ uid, file })
+    });
+
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    if (data.code) {
+      // 只显示短码后缀
+      document.getElementById("codeText").textContent = "id" + data.code;
+      document.getElementById("resultBox").classList.remove("hidden");
+    } else {
+      alert("生成失败，请重试");
+    }
+  } catch (e) {
+    console.error(e);
+    alert("请求失败，请检查网络或稍后重试");
+  }
+});
+</script>
+</body>
+</html>
