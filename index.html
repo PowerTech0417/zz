@@ -3,109 +3,78 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Token 管理后台</title>
+<title>短链接生成器</title>
 <style>
   body { font-family: system-ui, sans-serif; background:#0a0f1c; color:#eaf0ff; padding:2em; }
-  input, button, select { font-size:1em; margin:0.2em 0; padding:0.5em; }
-  button { cursor:pointer; }
+  input, select, button { margin:0.5em 0; padding:0.5em; width:100%; }
+  button { cursor:pointer; background:#4d6aff; color:white; border:none; border-radius:5px; }
   .hidden { display:none; }
+  .link-box { margin-top:1em; padding:0.5em; background:#1a2030; border-radius:5px; word-break:break-all; }
 </style>
 </head>
 <body>
-<h1>Token 管理后台</h1>
+<h2>🔗 短链接生成器</h2>
 
-<label>UID: 
-  <input type="text" id="uidInput" placeholder="输入 UID">
-  <button id="pasteBtn">📋 粘贴</button>
+<label>UID:
+  <input type="text" id="uid" placeholder="输入或粘贴UID">
+  <button type="button" onclick="pasteUid()">📋 粘贴</button>
 </label>
-<br>
 
 <!-- 文件名隐藏 -->
-<input type="text" id="fileInput" class="hidden" value="pl.m3u">
+<input type="text" id="file" value="pl.m3u" class="hidden">
 
-<label>过期时间: 
-  <select id="expirySelect">
-    <option value="1m">1 个月</option>
-    <option value="1y">1 年</option>
-    <option value="perm">永久</option>
+<label>过期时间:
+  <select id="exp">
+    <option value="2592000000">1个月</option>       <!-- 30天×24h×60m×60s×1000ms -->
+    <option value="31536000000">1年</option>        <!-- 365天 -->
+    <option value="0">永久</option>
   </select>
 </label>
-<br>
 
-<button id="createTokenBtn">生成短链接</button>
-<br><br>
+<button onclick="generateLink()">生成短链接</button>
 
-<label>生成的链接: </label>
-<input type="text" id="shortLink" readonly>
-<button id="copyLinkBtn">复制链接</button>
+<div class="link-box" id="linkBox"></div>
 
 <script>
-const uidInput = document.getElementById("uidInput");
-const pasteBtn = document.getElementById("pasteBtn");
-const createTokenBtn = document.getElementById("createTokenBtn");
-const shortLink = document.getElementById("shortLink");
-const copyLinkBtn = document.getElementById("copyLinkBtn");
-const fileInput = document.getElementById("fileInput");
-const expirySelect = document.getElementById("expirySelect");
+function pasteUid() {
+  navigator.clipboard.readText().then(text => {
+    document.getElementById("uid").value = text;
+  }).catch(err => alert("粘贴失败"));
+}
 
-// 粘贴剪贴板内容到 UID
-pasteBtn.addEventListener("click", async () => {
-  try {
-    const text = await navigator.clipboard.readText();
-    uidInput.value = text;
-  } catch (e) {
-    alert("无法读取剪贴板: " + e);
-  }
-});
+async function generateLink() {
+  const uid = document.getElementById("uid").value.trim();
+  const file = document.getElementById("file").value.trim();
+  const expMs = Number(document.getElementById("exp").value);
 
-// 生成短链接
-createTokenBtn.addEventListener("click", async () => {
-  const uid = uidInput.value.trim();
-  const file = fileInput.value;
-  const expiryOption = expirySelect.value;
+  if(!uid) { alert("请输入UID"); return; }
 
-  if (!uid) {
-    alert("请输入 UID");
-    return;
-  }
-
-  // 计算过期时间（马来西亚时间 UTC+8）
-  const now = Date.now() + 8*60*60*1000;
-  let exp;
-  if (expiryOption === "1m") {
-    exp = now + 30*24*60*60*1000; // 30天
-  } else if (expiryOption === "1y") {
-    exp = now + 365*24*60*60*1000; // 365天
-  } else {
-    exp = now + 100*365*24*60*60*1000; // 永久，大约100年
-  }
+  // 马来西亚时间 UTC+8
+  const malaysiaNow = Date.now() + 8*60*60*1000;
+  const exp = expMs === 0 ? 0 : malaysiaNow + expMs;
 
   try {
     const resp = await fetch("/api/create-token", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type":"application/json" },
       body: JSON.stringify({ uid, file, exp })
     });
-    if (!resp.ok) throw new Error(resp.statusText);
+    if(!resp.ok) throw new Error("请求失败");
     const data = await resp.json();
-    const code = data.code;
-    shortLink.value = `m.pwbtw.workers.dev/id${code}`;
-  } catch (e) {
-    alert("生成失败: " + e);
+    const shortCode = data.code;
+    const link = `${window.location.origin}/id${shortCode}?uid=${uid}&exp=${exp}&sig=PLACEHOLDER`;
+    document.getElementById("linkBox").innerHTML = `
+      短链接: <a href="${link}" target="_blank">${link}</a>
+      <button onclick="copyLink('${link}')">复制链接</button>
+    `;
+  } catch(e) {
+    alert("生成失败: " + e.message);
   }
-});
+}
 
-// 复制短链接
-copyLinkBtn.addEventListener("click", async () => {
-  const link = shortLink.value;
-  if (!link) return;
-  try {
-    await navigator.clipboard.writeText(link);
-    alert("已复制到剪贴板");
-  } catch (e) {
-    alert("复制失败: " + e);
-  }
-});
+function copyLink(link) {
+  navigator.clipboard.writeText(link).then(()=> alert("已复制到剪贴板"));
+}
 </script>
 </body>
 </html>
