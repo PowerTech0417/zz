@@ -1,24 +1,14 @@
-/**
- * Cloudflare Worker — Secure M3U Proxy + One-time AES Key bound to device
- *
- * - Reads m3u from a public R2 URL (cross-account public R2)
- * - Verifies uid/exp/sig, enforces single-device via KV (UID_BINDINGS)
- * - Generates one-time AES-GCM key per request, encrypts m3u with it
- * - Encrypts that one-time key with deviceKey (SHA-256 of x-device-id)
- * - Returns JSON { data, k } where both are base64(JSON{iv,ct})
- *
- * Also preserves:
- * - /api/create-token and /set-token: write 5-digit short code to KV (key short:{code})
- * - /r2/downloads.json → proxy to R2_BASE_URL + "downloads.json"
- * - root "/" redirects to not-found page per your rule
- */
-
-const R2_BASE_URL = "https://pub-9f5086173bec4bb0bd47f6680eaa4037.r2.dev/"; // you provided
+// ====== 配置区 ======
+const R2_BASE_URL = "https://pub-9f5086173bec4bb0bd47f6680eaa4037.r2.dev/"; // your public R2 root
 const EXPIRED_REDIRECT_URL = "https://life4u22.blogspot.com/p/powertech.html";
 const DEVICE_CONFLICT_URL = "https://life4u22.blogspot.com/p/id-ban.html";
 const NON_OTT_REDIRECT_URL = "https://life4u22.blogspot.com/p/channel-listott.html";
 const ROOT_NOTFOUND_REDIRECT = "https://life4u22.blogspot.com/p/not-found.html";
-const SIGN_SECRET = "mySuperSecretKey"; // <- Replace with your real secret
+const SIGN_SECRET = "mySuperSecretKey"; // <-- replace with your real secret via Worker secrets
+const ADMIN_KEY = "replace_with_admin_key"; // <-- replace and store as secret
+const OTT_KEYWORDS = ["OTT Player", "OTT TV", "OTT Navigator"];
+const MAX_TOKENS_PER_DEVICE = 3;
+// =====================
 
 addEventListener("fetch", event => {
   event.respondWith(handleEventSafe(event));
@@ -28,7 +18,7 @@ async function handleEventSafe(event) {
   try {
     return await handleRequest(event.request, event);
   } catch (err) {
-    console.error("Unhandled:", err);
+    console.error("Unhandled error:", err);
     return new Response("Internal Server Error", { status: 500 });
   }
 }
@@ -40,29 +30,61 @@ async function handleRequest(request, event) {
   const ua = request.headers.get("User-Agent") || "";
   const lowUA = ua.toLowerCase();
 
-  // === Root redirect rule (must redirect)
-  if (path === "/") {
-    return Response.redirect(ROOT_NOTFOUND_REDIRECT, 302);
+  // Root redirect enforced
+  if (path === "/") return Response.redirect(ROOT_NOTFOUND_REDIRECT, 302);
+
+  // ==== Admin endpoints (protected) ====
+  // Add token to device: POST /admin/add-token  body { deviceId, token, app }
+  // Remove token: POST /admin/remove-token  body { token }
+  // Query device: GET /admin/list-device?deviceId=xxx
+  if (path.startsWith("/admin/")) {
+    const adminKeyHeader = request.headers.get("x-admin-key");
+    if (!adminKeyHeader || adminKeyHeader !== ADMIN_KEY) return new Response("Forbidden", { status: 403 });
+
+    if (path === "/admin/add-token" && request.method === "POST") {
+      try {
+        const body = await request.json();
+        const deviceId = body.deviceId;
+        const token = body.token;
+        const app = body.app || "unknown";
+        if (!deviceId || !token) return new Response("Bad Request", { status: 400 });
+        await addTokenToDevice(deviceId, token, app);
+        return new Response("OK");
+      } catch (e) { return new Response("Bad Request", { status: 400 }); }
+    }
+
+    if (path === "/admin/remove-token" && request.method === "POST") {
+      try {
+        const body = await request.json();
+        const token = body.token;
+        if (!token) return new Response("Bad Request", { status: 400 });
+        const ok = await removeToken(token);
+        return new Response(ok ? "OK" : "NOT FOUND");
+      } catch (e) { return new Response("Bad Request", { status: 400 }); }
+    }
+
+    if (path === "/admin/list-device" && request.method === "GET") {
+      const deviceId = params.get("deviceId");
+      if (!deviceId) return new Response("Bad Request", { status: 400 });
+      const devRaw = await DEVICE_MAP.get(`device:${deviceId}`);
+      return new Response(devRaw || "{}", { headers: { "Content-Type": "application/json" }});
+    }
+
+    return new Response("Admin endpoint", { status: 200 });
   }
 
-  // === Token management endpoints (preserve per your requirements) ===
+  // Preserve token management endpoints (short code)
   if (path === "/api/create-token" && request.method === "POST") {
-    // expected body: JSON { uid, file }  -> create 5-digit code and store in KV as short:{code} -> { uid, file }
     try {
       const body = await request.json();
       const uid = body.uid || "";
       const file = body.file || "";
-      const code = gen5DigitsNoZero(); // 5-digit not starting with 0
-      const key = `short:${code}`;
-      await UID_BINDINGS.put(key, JSON.stringify({ uid, file }));
+      const code = gen5DigitsNoZero();
+      await UID_BINDINGS.put(`short:${code}`, JSON.stringify({ uid, file }));
       return new Response(JSON.stringify({ code }), { headers: { "Content-Type": "application/json" }});
-    } catch (e) {
-      return new Response("Bad Request", { status: 400 });
-    }
+    } catch (e) { return new Response("Bad Request", { status: 400 }); }
   }
-
   if (path === "/set-token" && request.method === "POST") {
-    // allows setting custom code: { code, uid, file }
     try {
       const body = await request.json();
       const code = String(body.code || "").slice(0,5);
@@ -71,19 +93,17 @@ async function handleRequest(request, event) {
       if (!/^\d{3,5}$/.test(code)) return new Response("Invalid code", { status: 400 });
       await UID_BINDINGS.put(`short:${code}`, JSON.stringify({ uid, file }));
       return new Response("OK");
-    } catch (e) {
-      return new Response("Bad Request", { status: 400 });
-    }
+    } catch (e) { return new Response("Bad Request", { status: 400 }); }
   }
 
-  // Proxy downloads.json from R2 if requested
-  if (path === "/r2/downloads.json") {
-    const target = `${R2_BASE_URL}downloads.json`;
-    const resp = await fetch(target);
-    return new Response(await resp.text(), { status: resp.status, headers: { "Content-Type": "application/json" }});
+  // Proxy /r2/pl.m3u --> (kept for compatibility if needed)
+  if (path === "/r2/pl.m3u") {
+    const r2Url = `${R2_BASE_URL}pl.m3u`;
+    const r2resp = await fetch(r2Url);
+    return new Response(await r2resp.text(), { status: r2resp.status, headers: { "Content-Type": "audio/x-mpegurl" }});
   }
 
-  // === UA / crawler blocking ===
+  // Block common crawlers/tools
   if (
     lowUA.includes("curl") ||
     lowUA.includes("wget") ||
@@ -92,170 +112,171 @@ async function handleRequest(request, event) {
     lowUA.includes("httpclient") ||
     lowUA.includes("java") ||
     lowUA.includes("insomnia")
-  ) {
-    return new Response("Crawler Blocked", { status: 403 });
-  }
+  ) return new Response("Crawler Blocked", { status: 403 });
 
-  // Basic OTT allowance: require Android and OTT-like UA tokens (do not change logic)
+  // Basic OTT UA check (preserve logic)
   const isAndroid = ua.includes("Android");
   const isTV = /TV|AFT|MiBOX|SmartTV|BRAVIA|SHIELD|AndroidTV/i.test(ua);
-  const OTT_KEYWORDS = ["OTT Player", "OTT TV", "OTT Navigator"];
   const appType = OTT_KEYWORDS.find(k => ua.includes(k)) || (isTV ? "OTT-TV-Unknown" : null);
+  if (!isAndroid || !appType) return Response.redirect(NON_OTT_REDIRECT_URL, 302);
 
-  if (!isAndroid || !appType) {
-    return Response.redirect(NON_OTT_REDIRECT_URL, 302);
-  }
-
-  // === Parameter checks (uid, exp, sig) - core logic (must be preserved)
+  // Core parameter checks
   const uid = params.get("uid");
   const exp = Number(params.get("exp") || 0);
   const sig = params.get("sig");
-  if (!uid || !exp || !sig) {
-    return new Response("🚫 Invalid Link: Missing parameters", { status: 403 });
-  }
-
-  // Check expiry (Malaysia/UTC+8 logic as you used earlier)
+  if (!uid || !exp || !sig) return new Response("🚫 Invalid Link: Missing parameters", { status: 403 });
   const malaysiaNow = Date.now() + 8 * 60 * 60 * 1000;
-  if (malaysiaNow > exp) {
-    return Response.redirect(EXPIRED_REDIRECT_URL, 302);
-  }
+  if (malaysiaNow > exp) return Response.redirect(EXPIRED_REDIRECT_URL, 302);
 
-  // Signature verify: HMAC-SHA256 on `${uid}:${exp}` using SIGN_SECRET
+  // Signature verify
   const text = `${uid}:${exp}`;
   const expectedSig = await sign(text, SIGN_SECRET);
   const sigValid = await timingSafeCompare(expectedSig, sig);
-  if (!sigValid) {
-    return new Response("🚫 Invalid Signature", { status: 403 });
-  }
+  if (!sigValid) return new Response("🚫 Invalid Signature", { status: 403 });
 
-  // === Device fingerprint handling: read from header x-device-id (per your project spec)
-  const deviceIdHeader = request.headers.get("x-device-id");
-  if (!deviceIdHeader) {
-    return new Response("Missing device fingerprint", { status: 401 });
-  }
-  const deviceFingerprint = deviceIdHeader.trim();
+  // Device + Token auth: headers x-device-id and x-app-token required
+  const deviceId = request.headers.get("x-device-id");
+  const appToken = request.headers.get("x-app-token");
+  if (!deviceId || !appToken) return new Response("Missing device or token", { status: 401 });
 
-  // === KV read/write: UID_BINDINGS
+  // Check device-token association
+  const ok = await verifyDeviceAndToken(deviceId, appToken);
+  if (!ok) return new Response("Unauthorized (device/token mismatch)", { status: 403 });
+
+  // UID_BINDINGS device binding logic (preserve original behavior)
   const key = `uid:${uid}`;
   let stored = null;
-  try {
-    stored = await UID_BINDINGS.get(key, "json");
-  } catch (e) {
-    console.error(`KV Read Error ${key}`, e);
-    return new Response("Service temporarily unavailable. (K-Err)", { status: 503 });
-  }
+  try { stored = await UID_BINDINGS.get(key, "json"); }
+  catch (e) { console.error("KV Read Error", e); return new Response("Service temporarily unavailable. (K-Err)", { status: 503 }); }
 
   if (!stored) {
-    // First bind
-    const toStore = { device: deviceFingerprint, apps: [appType], createdAt: new Date().toISOString() };
+    const toStore = { device: deviceId, apps: [appType], createdAt: new Date().toISOString() };
     await UID_BINDINGS.put(key, JSON.stringify(toStore));
-    console.log(`✅ UID ${uid} bound to device ${deviceFingerprint}`);
-  } else if (stored.device === deviceFingerprint) {
-    // same device — ensure appType recorded
+    console.log(`✅ UID ${uid} first bind ${deviceId}, app=${appType}`);
+  } else if (stored.device === deviceId) {
     if (!stored.apps.includes(appType)) {
       stored.apps.push(appType);
       await UID_BINDINGS.put(key, JSON.stringify(stored));
       console.log(`🟡 UID ${uid} same device new app ${appType}`);
-    } else {
-      // normal access
     }
   } else {
-    // different physical device — block
-    console.log(`🚫 UID ${uid} different device. stored=${stored.device} now=${deviceFingerprint}`);
+    console.log(`🚫 UID ${uid} different device login (stored=${stored.device} now=${deviceId})`);
     return Response.redirect(DEVICE_CONFLICT_URL, 302);
   }
 
-  // === At this point: authorized. Now handle serving encrypted m3u or passthrough endpoints.
-
-  // If requested path is like /<filename>.m3u or /secured-m3u, serve encrypted m3u
-  // We'll accept requests to: /secured-m3u OR any path that ends with .m3u (keep flexible)
+  // Serve encrypted m3u when requested (path ends with .m3u or /secured-m3u?file=)
   if (path === "/secured-m3u" || path.toLowerCase().endsWith(".m3u")) {
-    // Determine file key: if path is /secured-m3u take ?file=..., else use path name
     let objectName = "";
-    if (path === "/secured-m3u") {
-      objectName = params.get("file") || "pl.m3u"; // default
-    } else {
-      objectName = path.startsWith("/") ? path.slice(1) : path;
-    }
+    if (path === "/secured-m3u") objectName = params.get("file") || "pl.m3u";
+    else objectName = path.startsWith("/") ? path.slice(1) : path;
     if (!objectName) return new Response("No playlist specified", { status: 400 });
 
-    // Build full public R2 URL
     const r2Url = R2_BASE_URL + encodeURIComponent(objectName);
-
-    // Fetch the m3u from public R2 (cross-account public)
     const r2resp = await fetch(r2Url);
-    if (!r2resp.ok) {
-      return new Response("Playlist Not Found in R2", { status: 404 });
-    }
+    if (!r2resp.ok) return new Response("Playlist Not Found in R2", { status: 404 });
     const playlistText = await r2resp.text();
 
-    // === Generate one-time AES-256-GCM key (32 bytes)
+    // One-time AES-256-GCM key
     const oneTimeKey = crypto.getRandomValues(new Uint8Array(32));
 
-    // === Encrypt playlistText with oneTimeKey (AES-GCM)
+    // Encrypt playlist with oneTimeKey
     const encData = await aesGcmEncryptText(playlistText, oneTimeKey);
 
-    // === Derive deviceKey from deviceFingerprint (SHA-256)
-    const deviceKeyRaw = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(deviceFingerprint));
-    const deviceKey = new Uint8Array(deviceKeyRaw).slice(0, 32); // 32 bytes
+    // Derive deviceKey = SHA-256(deviceId)
+    const deviceKeyRaw = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(deviceId));
+    const deviceKey = new Uint8Array(deviceKeyRaw).slice(0,32);
 
-    // === Encrypt oneTimeKey with deviceKey (AES-GCM)
+    // Encrypt oneTimeKey with deviceKey
     const encKeyBlob = await aesGcmEncryptBinary(oneTimeKey, deviceKey);
 
-    // === Optional: store audit / usage in KV (not required, but helpful). We'll store lastAccess
-    try {
-      const meta = { lastAccess: Date.now(), file: objectName };
-      await UID_BINDINGS.put(`${key}:meta`, JSON.stringify(meta), { expirationTtl: 3600 });
-    } catch (e) { /* non-fatal */ }
+    // Optionally store usage metadata
+    try { await UID_BINDINGS.put(`${key}:meta`, JSON.stringify({ lastAccess: Date.now(), file: objectName }), { expirationTtl: 3600 }); } catch (e) {}
 
-    // === Return JSON
-    return new Response(JSON.stringify({
-      data: encData,
-      k: encKeyBlob
-    }), {
+    return new Response(JSON.stringify({ data: encData, k: encKeyBlob }), {
       headers: { "Content-Type": "application/json", "Cache-Control": "no-store" }
     });
   }
 
-  // If no other route matched, fallback OK (you can expand as needed)
+  // Fallback default
   return new Response("OK");
 }
 
-/* ------------------------
-   Helpers
------------------------- */
+/* =========================
+   Device & Token helpers
+========================= */
 
-function gen5DigitsNoZero() {
-  // generate 5-digit number between 10000 and 99999 (no leading zero)
-  const n = Math.floor(Math.random() * 90000) + 10000;
-  return String(n);
+async function verifyDeviceAndToken(deviceId, token) {
+  try {
+    const devRaw = await DEVICE_MAP.get(`device:${deviceId}`);
+    if (!devRaw) return false;
+    const dev = JSON.parse(devRaw);
+    if (!Array.isArray(dev.tokens)) return false;
+    return dev.tokens.includes(token);
+  } catch (e) {
+    console.error("verifyDeviceAndToken error:", e);
+    return false;
+  }
+}
+
+async function addTokenToDevice(deviceId, token, appName) {
+  await TOKEN_MAP.put(`token:${token}`, JSON.stringify({ device_id: deviceId, app: appName, created: Date.now() }));
+  let dev = null;
+  try {
+    const devRaw = await DEVICE_MAP.get(`device:${deviceId}`);
+    dev = devRaw ? JSON.parse(devRaw) : { device_uid: deviceId, tokens: [], last_seen: Date.now() };
+  } catch (e) {
+    dev = { device_uid: deviceId, tokens: [], last_seen: Date.now() };
+  }
+  if (!Array.isArray(dev.tokens)) dev.tokens = [];
+  if (!dev.tokens.includes(token)) dev.tokens.push(token);
+  if (dev.tokens.length > MAX_TOKENS_PER_DEVICE) {
+    dev.tokens = dev.tokens.slice(-MAX_TOKENS_PER_DEVICE);
+  }
+  dev.last_seen = Date.now();
+  await DEVICE_MAP.put(`device:${deviceId}`, JSON.stringify(dev));
+}
+
+async function removeToken(token) {
+  try {
+    const tRaw = await TOKEN_MAP.get(`token:${token}`);
+    if (!tRaw) return false;
+    const tObj = JSON.parse(tRaw);
+    const deviceId = tObj.device_id;
+    await TOKEN_MAP.delete(`token:${token}`);
+    const devRaw = await DEVICE_MAP.get(`device:${deviceId}`);
+    if (devRaw) {
+      const dev = JSON.parse(devRaw);
+      dev.tokens = (dev.tokens || []).filter(t => t !== token);
+      await DEVICE_MAP.put(`device:${deviceId}`, JSON.stringify(dev));
+    }
+    return true;
+  } catch (e) {
+    console.error("removeToken error:", e);
+    return false;
+  }
 }
 
 /* =========================
    Crypto helpers
-   - sign: HMAC-SHA256 return hex
-   - timingSafeCompare: compare hex safely
-   - aesGcmEncryptText -> returns base64(JSON{iv,ct})
-   - aesGcmEncryptBinary -> same for Uint8Array input
 ========================= */
 
+function gen5DigitsNoZero() {
+  let digits = "";
+  for (let i = 0; i < 5; i++) digits += Math.floor(Math.random() * 9) + 1;
+  return digits;
+}
+
 async function sign(text, secret) {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(text));
-  return Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, "0")).join("");
+  return Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2,"0")).join("");
 }
 
 function hexToBuffer(hex) {
   if (!hex) return new ArrayBuffer(0);
   if (hex.length % 2 !== 0) throw new Error("Invalid hex");
-  const arr = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < hex.length; i += 2) arr[i/2] = parseInt(hex.substr(i,2), 16);
+  const arr = new Uint8Array(hex.length/2);
+  for (let i = 0; i < hex.length; i+=2) arr[i/2] = parseInt(hex.substr(i,2), 16);
   return arr.buffer;
 }
 
@@ -264,14 +285,12 @@ async function timingSafeCompare(aHex, bHex) {
     if (!aHex || !bHex || aHex.length !== bHex.length) return false;
     const a = hexToBuffer(aHex);
     const b = hexToBuffer(bHex);
-    // subtle.timingSafeEqual exists in Worker global crypto
     if (crypto.subtle && crypto.subtle.timingSafeEqual) {
       return await crypto.subtle.timingSafeEqual(a, b);
     }
-    // fallback
     return aHex === bHex;
   } catch (e) {
-    console.error("timingSafeCompare fail:", e);
+    console.error("timingSafeCompare error:", e);
     return aHex === bHex;
   }
 }
@@ -280,14 +299,12 @@ async function aesGcmEncryptText(plaintext, keyBytes) {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const key = await crypto.subtle.importKey("raw", keyBytes, "AES-GCM", false, ["encrypt"]);
   const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(plaintext));
-  const payload = { iv: Array.from(iv), ct: Array.from(new Uint8Array(ct)) };
-  return btoa(JSON.stringify(payload));
+  return btoa(JSON.stringify({ iv: Array.from(iv), ct: Array.from(new Uint8Array(ct)) }));
 }
 
 async function aesGcmEncryptBinary(bin, keyBytes) {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const key = await crypto.subtle.importKey("raw", keyBytes, "AES-GCM", false, ["encrypt"]);
   const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, bin);
-  const payload = { iv: Array.from(iv), ct: Array.from(new Uint8Array(ct)) };
-  return btoa(JSON.stringify(payload));
+  return btoa(JSON.stringify({ iv: Array.from(iv), ct: Array.from(new Uint8Array(ct)) }));
 }
