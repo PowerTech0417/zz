@@ -5,7 +5,7 @@ const DEVICE_CONFLICT_URL = "https://life4u22.blogspot.com/p/id-ban.html";
 const NON_OTT_REDIRECT_URL = "https://life4u22.blogspot.com/p/channel-listott.html";
 const ROOT_NOTFOUND_REDIRECT = "https://life4u22.blogspot.com/p/not-found.html";
 const SIGN_SECRET = "mySuperSecretKey"; // <-- replace with your real secret via Worker secrets
-const ADMIN_KEY = "replace_with_admin_key"; // <-- replace and store as secret
+const ADMIN_KEY = "powertech_digital"; // <-- replace and store as secret
 const OTT_KEYWORDS = ["OTT Player", "OTT TV", "OTT Navigator"];
 const MAX_TOKENS_PER_DEVICE = 3;
 // =====================
