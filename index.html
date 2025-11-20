@@ -5,76 +5,103 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>短链接生成器</title>
 <style>
-  body { font-family: system-ui, sans-serif; background:#0a0f1c; color:#eaf0ff; padding:2em; }
-  input, select, button { margin:0.5em 0; padding:0.5em; width:100%; }
-  button { cursor:pointer; background:#4d6aff; color:white; border:none; border-radius:5px; }
-  .hidden { display:none; }
-  .link-box { margin-top:1em; padding:0.5em; background:#1a2030; border-radius:5px; word-break:break-all; }
+body { font-family: system-ui, sans-serif; background:#0a0f1c; color:#eaf0ff; padding:2em; }
+input, select, button { padding:0.5em; margin:0.3em 0; width:100%; }
+.hidden { display:none; }
+#result { margin-top:1em; background:#1a1f3c; padding:1em; border-radius:8px; word-break:break-all; }
+button.copy-btn { margin-top:0.5em; }
 </style>
 </head>
 <body>
-<h2>🔗 短链接生成器</h2>
 
-<label>UID:
-  <input type="text" id="uid" placeholder="输入或粘贴UID">
-  <button type="button" onclick="pasteUid()">📋 粘贴</button>
-</label>
+<h2>生成 OTT 短链接</h2>
 
-<!-- 文件名隐藏 -->
-<input type="text" id="file" value="pl.m3u" class="hidden">
+<label>UID:</label>
+<div style="display:flex; gap:0.5em;">
+  <input type="text" id="uid" placeholder="请输入 UID" />
+  <button id="pasteBtn">粘贴</button>
+</div>
 
-<label>过期时间:
-  <select id="exp">
-    <option value="2592000000">1个月</option>       <!-- 30天×24h×60m×60s×1000ms -->
-    <option value="31536000000">1年</option>        <!-- 365天 -->
-    <option value="0">永久</option>
-  </select>
-</label>
+<label>文件名 (隐藏，自动填):</label>
+<input type="text" id="filename" class="hidden" value="pl.m3u">
 
-<button onclick="generateLink()">生成短链接</button>
+<label>过期时间:</label>
+<select id="expiry">
+  <option value="month">1 个月</option>
+  <option value="year">1 年</option>
+  <option value="forever">永久</option>
+</select>
 
-<div class="link-box" id="linkBox"></div>
+<button id="genBtn">生成链接</button>
+
+<div id="result" class="hidden">
+  <div>短链接: <span id="shortLink"></span></div>
+  <button class="copy-btn" id="copyBtn">复制链接</button>
+</div>
 
 <script>
-function pasteUid() {
-  navigator.clipboard.readText().then(text => {
+const SIGN_SECRET = "mySuperSecretKey"; // 必须和 Worker 一致
+const BASE_URL = window.location.origin;
+
+document.getElementById("pasteBtn").addEventListener("click", async () => {
+  try {
+    const text = await navigator.clipboard.readText();
     document.getElementById("uid").value = text;
-  }).catch(err => alert("粘贴失败"));
-}
+  } catch(e){ alert("无法读取剪贴板"); }
+});
 
-async function generateLink() {
+document.getElementById("genBtn").addEventListener("click", async () => {
   const uid = document.getElementById("uid").value.trim();
-  const file = document.getElementById("file").value.trim();
-  const expMs = Number(document.getElementById("exp").value);
+  const file = document.getElementById("filename").value.trim();
+  if(!uid){ alert("请输入 UID"); return; }
 
-  if(!uid) { alert("请输入UID"); return; }
+  // 过期时间
+  const now = new Date();
+  let exp = now.getTime() + 8*3600*1000; // 马来西亚时间基础
+  const choice = document.getElementById("expiry").value;
+  if(choice==="month") exp += 30*24*3600*1000;
+  else if(choice==="year") exp += 365*24*3600*1000;
+  else if(choice==="forever") exp = 32503680000000; // 3000年
 
-  // 马来西亚时间 UTC+8
-  const malaysiaNow = Date.now() + 8*60*60*1000;
-  const exp = expMs === 0 ? 0 : malaysiaNow + expMs;
-
+  // 调用 /api/create-token
   try {
     const resp = await fetch("/api/create-token", {
-      method: "POST",
-      headers: { "Content-Type":"application/json" },
-      body: JSON.stringify({ uid, file, exp })
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ uid, file })
     });
     if(!resp.ok) throw new Error("请求失败");
     const data = await resp.json();
-    const shortCode = data.code;
-    const link = `${window.location.origin}/id${shortCode}?uid=${uid}&exp=${exp}&sig=PLACEHOLDER`;
-    document.getElementById("linkBox").innerHTML = `
-      短链接: <a href="${link}" target="_blank">${link}</a>
-      <button onclick="copyLink('${link}')">复制链接</button>
-    `;
-  } catch(e) {
-    alert("生成失败: " + e.message);
-  }
-}
+    const code = data.code;
 
-function copyLink(link) {
-  navigator.clipboard.writeText(link).then(()=> alert("已复制到剪贴板"));
+    // 生成签名
+    const sig = await generateHmac(uid + ":" + exp, SIGN_SECRET);
+
+    const link = `${BASE_URL}/id${code}?uid=${encodeURIComponent(uid)}&exp=${exp}&sig=${sig}`;
+    document.getElementById("shortLink").textContent = link;
+    document.getElementById("result").classList.remove("hidden");
+
+  } catch(e){
+    alert("生成失败：" + e.message);
+  }
+});
+
+// 复制
+document.getElementById("copyBtn").addEventListener("click", async () => {
+  const link = document.getElementById("shortLink").textContent;
+  try { await navigator.clipboard.writeText(link); alert("已复制！"); } 
+  catch(e){ alert("复制失败"); }
+});
+
+// HMAC-SHA256 生成签名
+async function generateHmac(message, secret){
+  const key = await crypto.subtle.importKey(
+    "raw", new TextEncoder().encode(secret), { name:"HMAC", hash:"SHA-256" }, false, ["sign"]
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(message));
+  return Array.from(new Uint8Array(sig)).map(b=>b.toString(16).padStart(2,"0")).join("");
 }
 </script>
+
 </body>
 </html>
