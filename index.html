@@ -3,104 +3,86 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>🔐 Token 短码生成器 - PowerTech</title>
+<title>Token 管理后台</title>
 <style>
-  body {
-    font-family: system-ui, sans-serif;
-    background: #0a0f1c;
-    color: #eaf0ff;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    height: 100vh;
-    margin: 0;
-  }
-  .container {
-    background: rgba(20,25,40,0.9);
-    padding: 2rem;
-    border-radius: 12px;
-    width: 100%;
-    max-width: 400px;
-    box-shadow: 0 0 20px rgba(77,106,255,0.3);
-  }
-  h1 {
-    font-size: 1.4rem;
-    text-align: center;
-    margin-bottom: 1rem;
-    color: #4d6aff;
-  }
-  input {
-    width: 100%;
-    padding: 0.6rem;
-    margin-bottom: 1rem;
-    border-radius: 6px;
-    border: none;
-    font-size: 1rem;
-  }
-  button {
-    width: 100%;
-    padding: 0.7rem;
-    font-size: 1rem;
-    border: none;
-    border-radius: 6px;
-    background-color: #4d6aff;
-    color: #fff;
-    cursor: pointer;
-  }
-  button:hover { background-color: #3b55d0; }
-  .result {
-    margin-top: 1rem;
-    background: rgba(255,255,255,0.1);
-    padding: 0.6rem;
-    border-radius: 6px;
-    text-align: center;
-    word-break: break-all;
-  }
-  .hidden {
-    display: none;
-  }
+  body { font-family: system-ui, sans-serif; background:#0a0f1c; color:#eaf0ff; padding:2em; }
+  input, button { font-size:1em; margin:0.2em 0; padding:0.5em; }
+  button { cursor:pointer; }
+  .hidden { display:none; }
 </style>
 </head>
 <body>
-<div class="container">
-  <h1>Token 短码生成器</h1>
-  <input type="text" id="uid" placeholder="输入 UID" />
-  <input type="text" id="file" placeholder="文件名 (可选)" />
-  <button id="genBtn">生成短码</button>
-  <div class="result hidden" id="resultBox">
-    短码: <span id="codeText"></span>
-  </div>
-</div>
+<h1>Token 管理后台</h1>
+
+<label>UID: 
+  <input type="text" id="uidInput" placeholder="输入 UID">
+  <button id="pasteBtn">📋 粘贴</button>
+</label>
+<br>
+
+<!-- 文件名隐藏 -->
+<input type="text" id="fileInput" class="hidden" value="pl.m3u">
+
+<button id="createTokenBtn">生成短链接</button>
+<br><br>
+
+<label>生成的链接: </label>
+<input type="text" id="shortLink" readonly>
+<button id="copyLinkBtn">复制链接</button>
 
 <script>
-const API_BASE = "/api/create-token"; // 直接使用你的 Worker API
+const uidInput = document.getElementById("uidInput");
+const pasteBtn = document.getElementById("pasteBtn");
+const createTokenBtn = document.getElementById("createTokenBtn");
+const shortLink = document.getElementById("shortLink");
+const copyLinkBtn = document.getElementById("copyLinkBtn");
+const fileInput = document.getElementById("fileInput");
 
-document.getElementById("genBtn").addEventListener("click", async () => {
-  const uid = document.getElementById("uid").value.trim();
-  const file = document.getElementById("file").value.trim();
-  if (!uid) return alert("请填写 UID");
+// 粘贴剪贴板内容到 UID
+pasteBtn.addEventListener("click", async () => {
+  try {
+    const text = await navigator.clipboard.readText();
+    uidInput.value = text;
+  } catch (e) {
+    alert("无法读取剪贴板: " + e);
+  }
+});
+
+// 生成短链接
+createTokenBtn.addEventListener("click", async () => {
+  const uid = uidInput.value.trim();
+  const file = fileInput.value;
+
+  if (!uid) {
+    alert("请输入 UID");
+    return;
+  }
 
   try {
-    const resp = await fetch(API_BASE, {
+    const resp = await fetch("/api/create-token", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ uid, file })
     });
-
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    if (!resp.ok) throw new Error(resp.statusText);
     const data = await resp.json();
-    if (data.code) {
-      // 只显示短码后缀
-      document.getElementById("codeText").textContent = "id" + data.code;
-      document.getElementById("resultBox").classList.remove("hidden");
-    } else {
-      alert("生成失败，请重试");
-    }
+    const code = data.code;
+    // 显示短链接（隐藏 https）
+    shortLink.value = `m.pwbtw.workers.dev/id${code}`;
   } catch (e) {
-    console.error(e);
-    alert("请求失败，请检查网络或稍后重试");
+    alert("生成失败: " + e);
+  }
+});
+
+// 复制短链接
+copyLinkBtn.addEventListener("click", async () => {
+  const link = shortLink.value;
+  if (!link) return;
+  try {
+    await navigator.clipboard.writeText(link);
+    alert("已复制到剪贴板");
+  } catch (e) {
+    alert("复制失败: " + e);
   }
 });
 </script>
