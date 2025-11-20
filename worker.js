@@ -91,21 +91,27 @@ async function handleRequest(request, event) {
     return new Response("Admin endpoint", { status: 200, headers: corsHeaders });
   }
 
-  // ==== /api/create-token ====
-  if (path === "/api/create-token") {
-    try {
-      const body = await request.json();
-      const uid = body.uid || "";
-      const file = body.file || "";
-      const code = gen5DigitsNoZero();
-      await UID_BINDINGS.put(`short:${code}`, JSON.stringify({ uid, file }));
-      return new Response(JSON.stringify({ code }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" }
-      });
-    } catch (e) {
-      return new Response("Bad Request", { status: 400, headers: corsHeaders });
-    }
+if (path === "/api/create-token") {
+  const corsHeaders = handleCors(request);
+  if (request.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
+
+  try {
+    const body = await request.json();
+    const uid = body.uid || "";
+    const file = body.file || "";
+    const exp = Number(body.exp) || 0;   // 🔹 支持前端传过来的过期时间
+    const code = gen5DigitsNoZero();
+
+    await UID_BINDINGS.put(`short:${code}`, JSON.stringify({ uid, file, exp }));  // 🔹 保存 exp
+
+    return new Response(JSON.stringify({ code }), {
+      headers: { ...corsHeaders, "Content-Type": "application/json" }
+    });
+  } catch (e) {
+    console.error("create-token error:", e);
+    return new Response("Bad Request", { status: 400, headers: handleCors(request) });
   }
+}
 
   // ==== /set-token ====
   if (path === "/set-token") {
