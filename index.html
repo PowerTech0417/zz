@@ -3,74 +3,90 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Token 生成器</title>
+<title>短链接生成器</title>
 <style>
-  body { font-family: system-ui, sans-serif; background: #0a0f1c; color: #eaf0ff; padding: 20px; }
-  .card { background: #02040a; padding: 20px; border-radius: 12px; margin-bottom: 20px; }
-  input, select, button { padding: 8px 12px; margin: 5px 0; border-radius: 6px; border: 1px solid #444; background: #0a0f1c; color: #eaf0ff; }
-  button { cursor: pointer; background: #4d6aff; border: none; color: #fff; }
-  button:hover { background: #3552d2; }
-  .row { display: flex; gap: 10px; align-items: center; }
-  .hidden { display: none; }
-  #result { word-break: break-all; margin-top: 10px; }
+  body {
+    font-family: system-ui, sans-serif;
+    background: #0a0f1c;
+    color: #eaf0ff;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 2em;
+  }
+  input, select, button {
+    padding: 0.6em;
+    margin: 0.4em 0;
+    border-radius: 0.4em;
+    border: none;
+    font-size: 1em;
+  }
+  input {
+    width: 90%;
+  }
+  button {
+    background: #4d6aff;
+    color: white;
+    cursor: pointer;
+  }
+  .short-link {
+    margin-top: 1em;
+    font-weight: bold;
+    font-size: 1.2em;
+  }
 </style>
 </head>
 <body>
 
-<h1>🔐 Token 生成器</h1>
+<h2>生成短链接</h2>
 
-<div class="card">
-  <div class="row">
-    <label>UID:</label>
-    <input type="text" id="uid" placeholder="请输入 UID">
-    <button onclick="pasteUid()">📋 粘贴</button>
-  </div>
-
-  <div class="row hidden">
-    <label>文件名:</label>
-    <input type="text" id="file" value="pl.m3u">
-  </div>
-
-  <div class="row">
-    <label>过期时间:</label>
-    <select id="expSelect">
-      <option value="month">1 个月</option>
-      <option value="year">1 年</option>
-      <option value="forever">永久</option>
-    </select>
-  </div>
-
-  <div class="row">
-    <button onclick="generateToken()">生成短链接</button>
-  </div>
-
-  <div id="result"></div>
+<label>UID：</label>
+<div>
+  <input type="text" id="uid" placeholder="输入或粘贴 UID">
+  <button type="button" onclick="pasteUid()">📋 粘贴</button>
 </div>
 
+<label>文件名（隐藏）</label>
+<input type="text" id="file" placeholder="自动隐藏" value="pl.m3u">
+
+<label>过期时间：</label>
+<select id="expSelect">
+  <option value="1m">1 个月</option>
+  <option value="1y">1 年</option>
+  <option value="perm">永久</option>
+</select>
+
+<button onclick="createToken()">生成短链接</button>
+
+<div class="short-link" id="result"></div>
+
 <script>
+// 粘贴 UID
 function pasteUid() {
-  navigator.clipboard.readText().then(text => document.getElementById('uid').value = text);
+  navigator.clipboard.readText().then(text => {
+    document.getElementById("uid").value = text.trim();
+  });
 }
 
-function calculateExp(type) {
-  const now = Date.now();
-  const msMonth = 30*24*60*60*1000;
-  const msYear = 365*24*60*60*1000;
-  const msForever = 100*365*24*60*60*1000;
-  let exp = now;
-  if(type==='month') exp += msMonth;
-  else if(type==='year') exp += msYear;
-  else if(type==='forever') exp += msForever;
-  return exp + 8*60*60*1000; // 马来西亚时间 +8h
+// 生成过期时间戳（马来西亚时间）
+function getExpTimestamp(option) {
+  const now = Date.now() + 8*3600*1000; // +8 时区
+  if (option === "1m") return now + 30*24*3600*1000;
+  if (option === "1y") return now + 365*24*3600*1000;
+  return now + 100*365*24*3600*1000; // 永久 ~100年
 }
 
-async function generateToken() {
-  const uid = document.getElementById('uid').value.trim();
-  const file = document.getElementById('file').value.trim();
-  const expType = document.getElementById('expSelect').value;
-  if(!uid) return alert("请输入 UID");
+// 生成短链接
+async function createToken() {
+  const uid = document.getElementById("uid").value.trim();
+  const file = document.getElementById("file").value.trim();
+  const expOpt = document.getElementById("expSelect").value;
+  if (!uid) {
+    alert("请填写 UID");
+    return;
+  }
 
-  const exp = calculateExp(expType);
+  const exp = getExpTimestamp(expOpt);
 
   try {
     const res = await fetch("/api/create-token", {
@@ -78,23 +94,25 @@ async function generateToken() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ uid, file, exp })
     });
-    if(!res.ok) throw new Error("请求失败");
+    if (!res.ok) throw new Error("请求失败");
     const data = await res.json();
-    const code = data.code;
-    const origin = window.location.origin.replace(/^https?:\/\//,''); // 去掉 https
-    const link = `${origin}/${code}`;
-    document.getElementById('result').innerHTML = `
-      <div>短码: <b>${code}</b></div>
-      <div>链接: <b>${link}</b> <button onclick="copyLink('${link}')">📋 复制链接</button></div>
-    `;
-  } catch(e) {
-    alert("生成失败：" + e.message);
-  }
-}
+    const shortLink = `id${data.code}`; // 隐藏 https
+    const resultEl = document.getElementById("result");
+    resultEl.textContent = shortLink;
 
-function copyLink(link) {
-  navigator.clipboard.writeText(link);
-  alert("链接已复制！");
+    // 复制按钮
+    const copyBtn = document.createElement("button");
+    copyBtn.textContent = "复制链接";
+    copyBtn.style.marginLeft = "0.5em";
+    copyBtn.onclick = () => {
+      navigator.clipboard.writeText(shortLink).then(()=> alert("已复制!"));
+    }
+    resultEl.appendChild(copyBtn);
+
+  } catch (e) {
+    alert("生成失败：" + e.message);
+    console.error(e);
+  }
 }
 </script>
 
