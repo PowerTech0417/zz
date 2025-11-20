@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Token 生成与管理</title>
+<title>Token 生成器</title>
 <style>
   body { font-family: system-ui, sans-serif; background: #0a0f1c; color: #eaf0ff; padding: 20px; }
   .card { background: #02040a; padding: 20px; border-radius: 12px; margin-bottom: 20px; }
@@ -49,26 +49,26 @@
 
 <script>
 function pasteUid() {
-  navigator.clipboard.readText().then(text => {
-    document.getElementById('uid').value = text;
-  });
+  navigator.clipboard.readText().then(text => document.getElementById('uid').value = text);
 }
 
 function calculateExp(type) {
   const now = Date.now();
   const msMonth = 30*24*60*60*1000;
   const msYear = 365*24*60*60*1000;
-  if (type === 'month') return now + msMonth + 8*60*60*1000; // 马来西亚 +8h
-  if (type === 'year') return now + msYear + 8*60*60*1000;
-  if (type === 'forever') return now + 100*365*24*60*60*1000; // 大约永久
-  return now + msMonth + 8*60*60*1000;
+  const msForever = 100*365*24*60*60*1000;
+  let exp = now;
+  if(type==='month') exp += msMonth;
+  else if(type==='year') exp += msYear;
+  else if(type==='forever') exp += msForever;
+  return exp + 8*60*60*1000; // 马来西亚时间 +8h
 }
 
 async function generateToken() {
   const uid = document.getElementById('uid').value.trim();
   const file = document.getElementById('file').value.trim();
   const expType = document.getElementById('expSelect').value;
-  if (!uid) return alert("请输入 UID");
+  if(!uid) return alert("请输入 UID");
 
   const exp = calculateExp(expType);
 
@@ -78,11 +78,11 @@ async function generateToken() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ uid, file, exp })
     });
-
-    if (!res.ok) throw new Error("请求失败");
+    if(!res.ok) throw new Error("请求失败");
     const data = await res.json();
     const code = data.code;
-    const link = `${window.location.origin}/${code}`;
+    const origin = window.location.origin.replace(/^https?:\/\//,''); // 去掉 https
+    const link = `${origin}/${code}`;
     document.getElementById('result').innerHTML = `
       <div>短码: <b>${code}</b></div>
       <div>链接: <b>${link}</b> <button onclick="copyLink('${link}')">📋 复制链接</button></div>
