@@ -14,13 +14,17 @@ addEventListener("fetch", event => {
   event.respondWith(handleEventSafe(event));
 });
 
-// CORS helper
-function corsHeaders() {
-  return {
+// ===== CORS 辅助函数 =====
+function handleCors(request) {
+  const headers = {
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, x-admin-key, x-device-id, x-app-token"
   };
+  if (request.method === "OPTIONS") {
+    return new Response(null, { headers });
+  }
+  return headers;
 }
 
 async function handleEventSafe(event) {
@@ -84,30 +88,42 @@ async function handleRequest(request, event) {
     return new Response("Admin endpoint", { status: 200, headers: corsHeaders() });
   }
 
-  // ==== Token API ====
-  if (path === "/api/create-token" && request.method === "POST") {
-    try {
-      const body = await request.json();
-      const uid = body.uid || "";
-      const file = body.file || "";
-      const code = gen5DigitsNoZero();
-      await UID_BINDINGS.put(`short:${code}`, JSON.stringify({ uid, file }));
-      return new Response(JSON.stringify({ code }), { headers: { "Content-Type": "application/json", ...corsHeaders() }});
-    } catch (e) { return new Response("Bad Request", { status: 400, headers: corsHeaders() }); }
-  }
+// ==== 修改 /api/create-token ====
+if (path === "/api/create-token") {
+  const corsHeaders = handleCors(request);
+  if (request.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
-  if (path === "/set-token" && request.method === "POST") {
-    try {
-      const body = await request.json();
-      const code = String(body.code || "").slice(0,5);
-      const uid = body.uid || "";
-      const file = body.file || "";
-      if (!/^\d{3,5}$/.test(code)) return new Response("Invalid code", { status: 400, headers: corsHeaders() });
-      await UID_BINDINGS.put(`short:${code}`, JSON.stringify({ uid, file }));
-      return new Response("OK", { headers: corsHeaders() });
-    } catch (e) { return new Response("Bad Request", { status: 400, headers: corsHeaders() }); }
+  try {
+    const body = await request.json();
+    const uid = body.uid || "";
+    const file = body.file || "";
+    const code = gen5DigitsNoZero();
+    await UID_BINDINGS.put(`short:${code}`, JSON.stringify({ uid, file }));
+    return new Response(JSON.stringify({ code }), {
+      headers: { ...corsHeaders, "Content-Type": "application/json" }
+    });
+  } catch (e) {
+    return new Response("Bad Request", { status: 400, headers: corsHeaders });
   }
+}
 
+// ==== 修改 /set-token ====
+if (path === "/set-token") {
+  const corsHeaders = handleCors(request);
+  if (request.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
+
+  try {
+    const body = await request.json();
+    const code = String(body.code || "").slice(0,5);
+    const uid = body.uid || "";
+    const file = body.file || "";
+    if (!/^\d{3,5}$/.test(code)) return new Response("Invalid code", { status: 400, headers: corsHeaders });
+    await UID_BINDINGS.put(`short:${code}`, JSON.stringify({ uid, file }));
+    return new Response("OK", { headers: corsHeaders });
+  } catch (e) {
+    return new Response("Bad Request", { status: 400, headers: corsHeaders });
+  }
+}
   // ==== R2 M3U proxy ====
   if (path === "/r2/pl.m3u") {
     const r2Url = `${R2_BASE_URL}pl.m3u`;
