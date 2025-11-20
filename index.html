@@ -6,7 +6,7 @@
 <title>Token 管理后台</title>
 <style>
   body { font-family: system-ui, sans-serif; background:#0a0f1c; color:#eaf0ff; padding:2em; }
-  input, button { font-size:1em; margin:0.2em 0; padding:0.5em; }
+  input, button, select { font-size:1em; margin:0.2em 0; padding:0.5em; }
   button { cursor:pointer; }
   .hidden { display:none; }
 </style>
@@ -23,6 +23,15 @@
 <!-- 文件名隐藏 -->
 <input type="text" id="fileInput" class="hidden" value="pl.m3u">
 
+<label>过期时间: 
+  <select id="expirySelect">
+    <option value="1m">1 个月</option>
+    <option value="1y">1 年</option>
+    <option value="perm">永久</option>
+  </select>
+</label>
+<br>
+
 <button id="createTokenBtn">生成短链接</button>
 <br><br>
 
@@ -37,6 +46,7 @@ const createTokenBtn = document.getElementById("createTokenBtn");
 const shortLink = document.getElementById("shortLink");
 const copyLinkBtn = document.getElementById("copyLinkBtn");
 const fileInput = document.getElementById("fileInput");
+const expirySelect = document.getElementById("expirySelect");
 
 // 粘贴剪贴板内容到 UID
 pasteBtn.addEventListener("click", async () => {
@@ -52,22 +62,33 @@ pasteBtn.addEventListener("click", async () => {
 createTokenBtn.addEventListener("click", async () => {
   const uid = uidInput.value.trim();
   const file = fileInput.value;
+  const expiryOption = expirySelect.value;
 
   if (!uid) {
     alert("请输入 UID");
     return;
   }
 
+  // 计算过期时间（马来西亚时间 UTC+8）
+  const now = Date.now() + 8*60*60*1000;
+  let exp;
+  if (expiryOption === "1m") {
+    exp = now + 30*24*60*60*1000; // 30天
+  } else if (expiryOption === "1y") {
+    exp = now + 365*24*60*60*1000; // 365天
+  } else {
+    exp = now + 100*365*24*60*60*1000; // 永久，大约100年
+  }
+
   try {
     const resp = await fetch("/api/create-token", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ uid, file })
+      body: JSON.stringify({ uid, file, exp })
     });
     if (!resp.ok) throw new Error(resp.statusText);
     const data = await resp.json();
     const code = data.code;
-    // 显示短链接（隐藏 https）
     shortLink.value = `m.pwbtw.workers.dev/id${code}`;
   } catch (e) {
     alert("生成失败: " + e);
