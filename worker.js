@@ -46,17 +46,14 @@ async function handleRequest(request, event) {
   // Root redirect
   if (path === "/") return Response.redirect(ROOT_NOTFOUND_REDIRECT, 302);
 
-  // OPTIONS preflight
-  if (request.method === "OPTIONS") {
-    return new Response(null, { headers: corsHeaders() });
-  }
+// OPTIONS preflight
+if (request.method === "OPTIONS") {
+  return new Response(null, { headers: handleCors(request) }); // 🔹
+}
 
-  // ==== Admin endpoints ====
-  if (path.startsWith("/admin/")) {
-    const adminKeyHeader = request.headers.get("x-admin-key");
-    if (!adminKeyHeader || adminKeyHeader !== ADMIN_KEY) return new Response("Forbidden", { status: 403, headers: corsHeaders() });
-
-    if (path === "/admin/add-token" && request.method === "POST") {
+if (!adminKeyHeader || adminKeyHeader !== ADMIN_KEY) return new Response("Forbidden", { status: 403, headers: handleCors(request) }); // 🔹
+   
+  if (path === "/admin/add-token" && request.method === "POST") {
       try {
         const body = await request.json();
         const deviceId = body.deviceId;
@@ -80,7 +77,7 @@ async function handleRequest(request, event) {
 
     if (path === "/admin/list-device" && request.method === "GET") {
       const deviceId = params.get("deviceId");
-      if (!deviceId) return new Response("Bad Request", { status: 400, headers: corsHeaders() });
+      if (!deviceId) return new Response("Bad Request", { status: 400, headers: handleCors() });
       const devRaw = await DEVICE_MAP.get(`device:${deviceId}`);
       return new Response(devRaw || "{}", { headers: { "Content-Type": "application/json", ...corsHeaders() }});
     }
@@ -128,7 +125,7 @@ if (path === "/set-token") {
   if (path === "/r2/pl.m3u") {
     const r2Url = `${R2_BASE_URL}pl.m3u`;
     const r2resp = await fetch(r2Url);
-    return new Response(await r2resp.text(), { status: r2resp.status, headers: { "Content-Type": "audio/x-mpegurl", ...corsHeaders() }});
+    return new Response(await r2resp.text(), { status: r2resp.status, headers: { "Content-Type": "audio/x-mpegurl", ...handleCors() }});
   }
 
   // Block crawlers
