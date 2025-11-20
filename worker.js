@@ -1,11 +1,11 @@
 // ====== 配置区 ======
-const R2_BASE_URL = "https://pub-9f5086173bec4bb0bd47f6680eaa4037.r2.dev/"; // your public R2 root
+const R2_BASE_URL = "https://pub-9f5086173bec4bb0bd47f6680eaa4037.r2.dev/"; 
 const EXPIRED_REDIRECT_URL = "https://life4u22.blogspot.com/p/powertech.html";
 const DEVICE_CONFLICT_URL = "https://life4u22.blogspot.com/p/id-ban.html";
 const NON_OTT_REDIRECT_URL = "https://life4u22.blogspot.com/p/channel-listott.html";
 const ROOT_NOTFOUND_REDIRECT = "https://life4u22.blogspot.com/p/not-found.html";
-const SIGN_SECRET = "mySuperSecretKey"; // <-- replace with your real secret via Worker secrets
-const ADMIN_KEY = "powertech_digital"; // <-- replace and store as secret
+const SIGN_SECRET = "mySuperSecretKey";
+const ADMIN_KEY = "powertech_digital";
 const OTT_KEYWORDS = ["OTT Player", "OTT TV", "OTT Navigator"];
 const MAX_TOKENS_PER_DEVICE = 3;
 // =====================
@@ -13,6 +13,15 @@ const MAX_TOKENS_PER_DEVICE = 3;
 addEventListener("fetch", event => {
   event.respondWith(handleEventSafe(event));
 });
+
+// CORS helper
+function corsHeaders() {
+  return {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, x-admin-key, x-device-id, x-app-token"
+  };
+}
 
 async function handleEventSafe(event) {
   try {
@@ -30,16 +39,18 @@ async function handleRequest(request, event) {
   const ua = request.headers.get("User-Agent") || "";
   const lowUA = ua.toLowerCase();
 
-  // Root redirect enforced
+  // Root redirect
   if (path === "/") return Response.redirect(ROOT_NOTFOUND_REDIRECT, 302);
 
-  // ==== Admin endpoints (protected) ====
-  // Add token to device: POST /admin/add-token  body { deviceId, token, app }
-  // Remove token: POST /admin/remove-token  body { token }
-  // Query device: GET /admin/list-device?deviceId=xxx
+  // OPTIONS preflight
+  if (request.method === "OPTIONS") {
+    return new Response(null, { headers: corsHeaders() });
+  }
+
+  // ==== Admin endpoints ====
   if (path.startsWith("/admin/")) {
     const adminKeyHeader = request.headers.get("x-admin-key");
-    if (!adminKeyHeader || adminKeyHeader !== ADMIN_KEY) return new Response("Forbidden", { status: 403 });
+    if (!adminKeyHeader || adminKeyHeader !== ADMIN_KEY) return new Response("Forbidden", { status: 403, headers: corsHeaders() });
 
     if (path === "/admin/add-token" && request.method === "POST") {
       try {
@@ -47,33 +58,33 @@ async function handleRequest(request, event) {
         const deviceId = body.deviceId;
         const token = body.token;
         const app = body.app || "unknown";
-        if (!deviceId || !token) return new Response("Bad Request", { status: 400 });
+        if (!deviceId || !token) return new Response("Bad Request", { status: 400, headers: corsHeaders() });
         await addTokenToDevice(deviceId, token, app);
-        return new Response("OK");
-      } catch (e) { return new Response("Bad Request", { status: 400 }); }
+        return new Response("OK", { headers: corsHeaders() });
+      } catch (e) { return new Response("Bad Request", { status: 400, headers: corsHeaders() }); }
     }
 
     if (path === "/admin/remove-token" && request.method === "POST") {
       try {
         const body = await request.json();
         const token = body.token;
-        if (!token) return new Response("Bad Request", { status: 400 });
+        if (!token) return new Response("Bad Request", { status: 400, headers: corsHeaders() });
         const ok = await removeToken(token);
-        return new Response(ok ? "OK" : "NOT FOUND");
-      } catch (e) { return new Response("Bad Request", { status: 400 }); }
+        return new Response(ok ? "OK" : "NOT FOUND", { headers: corsHeaders() });
+      } catch (e) { return new Response("Bad Request", { status: 400, headers: corsHeaders() }); }
     }
 
     if (path === "/admin/list-device" && request.method === "GET") {
       const deviceId = params.get("deviceId");
-      if (!deviceId) return new Response("Bad Request", { status: 400 });
+      if (!deviceId) return new Response("Bad Request", { status: 400, headers: corsHeaders() });
       const devRaw = await DEVICE_MAP.get(`device:${deviceId}`);
-      return new Response(devRaw || "{}", { headers: { "Content-Type": "application/json" }});
+      return new Response(devRaw || "{}", { headers: { "Content-Type": "application/json", ...corsHeaders() }});
     }
 
-    return new Response("Admin endpoint", { status: 200 });
+    return new Response("Admin endpoint", { status: 200, headers: corsHeaders() });
   }
 
-  // Preserve token management endpoints (short code)
+  // ==== Token API ====
   if (path === "/api/create-token" && request.method === "POST") {
     try {
       const body = await request.json();
@@ -81,29 +92,30 @@ async function handleRequest(request, event) {
       const file = body.file || "";
       const code = gen5DigitsNoZero();
       await UID_BINDINGS.put(`short:${code}`, JSON.stringify({ uid, file }));
-      return new Response(JSON.stringify({ code }), { headers: { "Content-Type": "application/json" }});
-    } catch (e) { return new Response("Bad Request", { status: 400 }); }
+      return new Response(JSON.stringify({ code }), { headers: { "Content-Type": "application/json", ...corsHeaders() }});
+    } catch (e) { return new Response("Bad Request", { status: 400, headers: corsHeaders() }); }
   }
+
   if (path === "/set-token" && request.method === "POST") {
     try {
       const body = await request.json();
       const code = String(body.code || "").slice(0,5);
       const uid = body.uid || "";
       const file = body.file || "";
-      if (!/^\d{3,5}$/.test(code)) return new Response("Invalid code", { status: 400 });
+      if (!/^\d{3,5}$/.test(code)) return new Response("Invalid code", { status: 400, headers: corsHeaders() });
       await UID_BINDINGS.put(`short:${code}`, JSON.stringify({ uid, file }));
-      return new Response("OK");
-    } catch (e) { return new Response("Bad Request", { status: 400 }); }
+      return new Response("OK", { headers: corsHeaders() });
+    } catch (e) { return new Response("Bad Request", { status: 400, headers: corsHeaders() }); }
   }
 
-  // Proxy /r2/pl.m3u --> (kept for compatibility if needed)
+  // ==== R2 M3U proxy ====
   if (path === "/r2/pl.m3u") {
     const r2Url = `${R2_BASE_URL}pl.m3u`;
     const r2resp = await fetch(r2Url);
-    return new Response(await r2resp.text(), { status: r2resp.status, headers: { "Content-Type": "audio/x-mpegurl" }});
+    return new Response(await r2resp.text(), { status: r2resp.status, headers: { "Content-Type": "audio/x-mpegurl", ...corsHeaders() }});
   }
 
-  // Block common crawlers/tools
+  // Block crawlers
   if (
     lowUA.includes("curl") ||
     lowUA.includes("wget") ||
@@ -112,9 +124,9 @@ async function handleRequest(request, event) {
     lowUA.includes("httpclient") ||
     lowUA.includes("java") ||
     lowUA.includes("insomnia")
-  ) return new Response("Crawler Blocked", { status: 403 });
+  ) return new Response("Crawler Blocked", { status: 403, headers: corsHeaders() });
 
-  // Basic OTT UA check (preserve logic)
+  // Basic OTT UA check
   const isAndroid = ua.includes("Android");
   const isTV = /TV|AFT|MiBOX|SmartTV|BRAVIA|SHIELD|AndroidTV/i.test(ua);
   const appType = OTT_KEYWORDS.find(k => ua.includes(k)) || (isTV ? "OTT-TV-Unknown" : null);
@@ -124,7 +136,7 @@ async function handleRequest(request, event) {
   const uid = params.get("uid");
   const exp = Number(params.get("exp") || 0);
   const sig = params.get("sig");
-  if (!uid || !exp || !sig) return new Response("🚫 Invalid Link: Missing parameters", { status: 403 });
+  if (!uid || !exp || !sig) return new Response("🚫 Invalid Link: Missing parameters", { status: 403, headers: corsHeaders() });
   const malaysiaNow = Date.now() + 8 * 60 * 60 * 1000;
   if (malaysiaNow > exp) return Response.redirect(EXPIRED_REDIRECT_URL, 302);
 
@@ -132,22 +144,21 @@ async function handleRequest(request, event) {
   const text = `${uid}:${exp}`;
   const expectedSig = await sign(text, SIGN_SECRET);
   const sigValid = await timingSafeCompare(expectedSig, sig);
-  if (!sigValid) return new Response("🚫 Invalid Signature", { status: 403 });
+  if (!sigValid) return new Response("🚫 Invalid Signature", { status: 403, headers: corsHeaders() });
 
-  // Device + Token auth: headers x-device-id and x-app-token required
+  // Device + Token auth
   const deviceId = request.headers.get("x-device-id");
   const appToken = request.headers.get("x-app-token");
-  if (!deviceId || !appToken) return new Response("Missing device or token", { status: 401 });
+  if (!deviceId || !appToken) return new Response("Missing device or token", { status: 401, headers: corsHeaders() });
 
-  // Check device-token association
   const ok = await verifyDeviceAndToken(deviceId, appToken);
-  if (!ok) return new Response("Unauthorized (device/token mismatch)", { status: 403 });
+  if (!ok) return new Response("Unauthorized (device/token mismatch)", { status: 403, headers: corsHeaders() });
 
-  // UID_BINDINGS device binding logic (preserve original behavior)
+  // UID_BINDINGS logic
   const key = `uid:${uid}`;
   let stored = null;
   try { stored = await UID_BINDINGS.get(key, "json"); }
-  catch (e) { console.error("KV Read Error", e); return new Response("Service temporarily unavailable. (K-Err)", { status: 503 }); }
+  catch (e) { console.error("KV Read Error", e); return new Response("Service temporarily unavailable. (K-Err)", { status: 503, headers: corsHeaders() }); }
 
   if (!stored) {
     const toStore = { device: deviceId, apps: [appType], createdAt: new Date().toISOString() };
@@ -164,41 +175,32 @@ async function handleRequest(request, event) {
     return Response.redirect(DEVICE_CONFLICT_URL, 302);
   }
 
-  // Serve encrypted m3u when requested (path ends with .m3u or /secured-m3u?file=)
+  // Serve encrypted m3u
   if (path === "/secured-m3u" || path.toLowerCase().endsWith(".m3u")) {
     let objectName = "";
     if (path === "/secured-m3u") objectName = params.get("file") || "pl.m3u";
     else objectName = path.startsWith("/") ? path.slice(1) : path;
-    if (!objectName) return new Response("No playlist specified", { status: 400 });
+    if (!objectName) return new Response("No playlist specified", { status: 400, headers: corsHeaders() });
 
     const r2Url = R2_BASE_URL + encodeURIComponent(objectName);
     const r2resp = await fetch(r2Url);
-    if (!r2resp.ok) return new Response("Playlist Not Found in R2", { status: 404 });
+    if (!r2resp.ok) return new Response("Playlist Not Found in R2", { status: 404, headers: corsHeaders() });
     const playlistText = await r2resp.text();
 
-    // One-time AES-256-GCM key
     const oneTimeKey = crypto.getRandomValues(new Uint8Array(32));
-
-    // Encrypt playlist with oneTimeKey
     const encData = await aesGcmEncryptText(playlistText, oneTimeKey);
-
-    // Derive deviceKey = SHA-256(deviceId)
     const deviceKeyRaw = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(deviceId));
     const deviceKey = new Uint8Array(deviceKeyRaw).slice(0,32);
-
-    // Encrypt oneTimeKey with deviceKey
     const encKeyBlob = await aesGcmEncryptBinary(oneTimeKey, deviceKey);
 
-    // Optionally store usage metadata
     try { await UID_BINDINGS.put(`${key}:meta`, JSON.stringify({ lastAccess: Date.now(), file: objectName }), { expirationTtl: 3600 }); } catch (e) {}
 
     return new Response(JSON.stringify({ data: encData, k: encKeyBlob }), {
-      headers: { "Content-Type": "application/json", "Cache-Control": "no-store" }
+      headers: { "Content-Type": "application/json", "Cache-Control": "no-store", ...corsHeaders() }
     });
   }
 
-  // Fallback default
-  return new Response("OK");
+  return new Response("OK", { headers: corsHeaders() });
 }
 
 /* =========================
@@ -229,9 +231,7 @@ async function addTokenToDevice(deviceId, token, appName) {
   }
   if (!Array.isArray(dev.tokens)) dev.tokens = [];
   if (!dev.tokens.includes(token)) dev.tokens.push(token);
-  if (dev.tokens.length > MAX_TOKENS_PER_DEVICE) {
-    dev.tokens = dev.tokens.slice(-MAX_TOKENS_PER_DEVICE);
-  }
+  if (dev.tokens.length > MAX_TOKENS_PER_DEVICE) dev.tokens = dev.tokens.slice(-MAX_TOKENS_PER_DEVICE);
   dev.last_seen = Date.now();
   await DEVICE_MAP.put(`device:${deviceId}`, JSON.stringify(dev));
 }
