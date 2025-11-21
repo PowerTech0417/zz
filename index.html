@@ -1,120 +1,187 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>短链接生成器</title>
-<style>
-  body {
-    font-family: system-ui, sans-serif;
-    background: #0a0f1c;
-    color: #eaf0ff;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    padding: 2em;
-  }
-  input, select, button {
-    padding: 0.6em;
-    margin: 0.4em 0;
-    border-radius: 0.4em;
-    border: none;
-    font-size: 1em;
-  }
-  input {
-    width: 90%;
-  }
-  button {
-    background: #4d6aff;
-    color: white;
-    cursor: pointer;
-  }
-  .short-link {
-    margin-top: 1em;
-    font-weight: bold;
-    font-size: 1.2em;
-  }
-</style>
+    <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PowerTech Admin (修复版)</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #121212; color: #e0e0e0; padding-top: 20px; }
+        .card { background-color: #1e1e1e; border: 1px solid #333; margin-bottom: 20px; }
+        .form-control, .form-select { background-color: #2c2c2c; border-color: #444; color: #fff; }
+        .btn-primary { background-color: #0d6efd; }
+        pre { background: #000; color: #0f0; padding: 10px; border-radius: 5px; white-space: pre-wrap; }
+    </style>
 </head>
 <body>
+<div class="container">
+    <h3 class="text-center mb-4">PowerTech 控制台</h3>
 
-<h2>生成短链接</h2>
+    <!-- 状态检查区 -->
+    <div class="alert alert-secondary d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-server"></i> 服务器状态检查</span>
+        <button class="btn btn-sm btn-outline-light" onclick="checkConnection()">点击测试连接</button>
+    </div>
 
-<label>UID：</label>
-<div>
-  <input type="text" id="uid" placeholder="输入或粘贴 UID">
-  <button type="button" onclick="pasteUid()">📋 粘贴</button>
+    <ul class="nav nav-tabs mb-3" id="myTab" role="tablist">
+        <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#link-pane">生成链接</button></li>
+        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#device-pane">设备查询</button></li>
+        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#manage-pane">Token管理</button></li>
+    </ul>
+
+    <div class="tab-content">
+        <!-- 生成链接 -->
+        <div class="tab-pane fade show active" id="link-pane">
+            <div class="card p-4">
+                <div class="mb-3">
+                    <label>用户 UID</label>
+                    <input type="text" class="form-control" id="uid_input" placeholder="例如: user_888">
+                </div>
+                <div class="mb-3">
+                    <label>有效期</label>
+                    <select class="form-select" id="exp_input">
+                        <option value="365">1 年</option>
+                        <option value="36500">永久</option>
+                    </select>
+                </div>
+                <button class="btn btn-primary w-100" id="btnCreate" onclick="createLink()">生成链接</button>
+                <div class="mt-3 p-3 bg-dark border border-secondary rounded d-none" id="resultArea">
+                    <h4 class="text-success" id="finalUrl">...</h4>
+                    <button class="btn btn-sm btn-secondary mt-2" onclick="copyUrl()">复制链接</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 设备查询 -->
+        <div class="tab-pane fade" id="device-pane">
+            <div class="card p-4">
+                <div class="input-group mb-3">
+                    <input type="text" class="form-control" id="query_dev_id" placeholder="输入 Device ID">
+                    <button class="btn btn-info" onclick="queryDevice()">查询</button>
+                </div>
+                <pre id="deviceOutput" class="d-none"></pre>
+            </div>
+        </div>
+
+        <!-- Token 管理 -->
+        <div class="tab-pane fade" id="manage-pane">
+            <div class="card p-4 border-danger">
+                <h5 class="text-danger">删除 Token</h5>
+                <div class="input-group">
+                    <input type="text" class="form-control" id="del_token" placeholder="输入 Token">
+                    <button class="btn btn-danger" onclick="deleteToken()">删除</button>
+                </div>
+            </div>
+        </div>
+    </div>
 </div>
 
-<label>文件名（隐藏）</label>
-<input type="text" id="file" placeholder="自动隐藏" value="pl.m3u">
-
-<label>过期时间：</label>
-<select id="expSelect">
-  <option value="1m">1 个月</option>
-  <option value="1y">1 年</option>
-  <option value="perm">永久</option>
-</select>
-
-<button onclick="createToken()">生成短链接</button>
-
-<div class="short-link" id="result"></div>
-
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-// 粘贴 UID
-function pasteUid() {
-  navigator.clipboard.readText().then(text => {
-    document.getElementById("uid").value = text.trim();
-  });
-}
+    // 配置
+    const API_HOST = "https://m.powertech.workers.dev";
+    const API_KEY = "powertech_digital";
 
-// 生成过期时间戳（马来西亚时间）
-function getExpTimestamp(option) {
-  const now = Date.now() + 8*3600*1000; // +8 时区
-  if (option === "1m") return now + 30*24*3600*1000;
-  if (option === "1y") return now + 365*24*3600*1000;
-  return now + 100*365*24*3600*1000; // 永久 ~100年
-}
+    // 封装请求函数，统一处理错误
+    async function safeFetch(endpoint, options = {}) {
+        const url = `${API_HOST}${endpoint}`;
+        // 默认 Headers
+        const defaultHeaders = {
+            'x-admin-key': API_KEY,
+            'Content-Type': 'application/json'
+        };
+        options.headers = { ...defaultHeaders, ...options.headers };
 
-// 生成短链接
-async function createToken() {
-  const uid = document.getElementById("uid").value.trim();
-  const file = document.getElementById("file").value.trim();
-  const expOpt = document.getElementById("expSelect").value;
-  if (!uid) {
-    alert("请填写 UID");
-    return;
-  }
-
-  const exp = getExpTimestamp(expOpt);
-
-  try {
-    const res = await fetch("/api/create-token", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ uid, file, exp })
-    });
-    if (!res.ok) throw new Error("请求失败");
-    const data = await res.json();
-    const shortLink = `id${data.code}`; // 隐藏 https
-    const resultEl = document.getElementById("result");
-    resultEl.textContent = shortLink;
-
-    // 复制按钮
-    const copyBtn = document.createElement("button");
-    copyBtn.textContent = "复制链接";
-    copyBtn.style.marginLeft = "0.5em";
-    copyBtn.onclick = () => {
-      navigator.clipboard.writeText(shortLink).then(()=> alert("已复制!"));
+        try {
+            console.log(`正在请求: ${url}`);
+            const response = await fetch(url, options);
+            
+            if (!response.ok) {
+                const errText = await response.text();
+                throw new Error(`服务器返回错误: ${response.status} - ${errText}`);
+            }
+            return await response.json();
+        } catch (error) {
+            console.error("请求失败:", error);
+            alert(`❌ 请求失败！\n\n原因: ${error.message}\n\n如果提示 "Failed to fetch"，请检查你的网络是否开启了 VPN/代理。`);
+            throw error;
+        }
     }
-    resultEl.appendChild(copyBtn);
 
-  } catch (e) {
-    alert("生成失败：" + e.message);
-    console.error(e);
-  }
-}
+    // 1. 测试连接
+    async function checkConnection() {
+        try {
+            const data = await safeFetch('/admin/ping');
+            alert("✅ 连接成功！API 正常工作。");
+        } catch (e) {
+            // 错误已在 safeFetch 中弹窗
+        }
+    }
+
+    // 2. 生成链接
+    async function createLink() {
+        const uid = document.getElementById('uid_input').value.trim();
+        const days = parseInt(document.getElementById('exp_input').value);
+        if (!uid) return alert("请输入 UID");
+
+        const btn = document.getElementById('btnCreate');
+        btn.disabled = true;
+        btn.innerText = "正在生成...";
+
+        try {
+            const exp = Date.now() + (days * 24 * 60 * 60 * 1000);
+            const data = await safeFetch('/api/create-short', {
+                method: 'POST',
+                body: JSON.stringify({ uid, exp })
+            });
+
+            const link = `${API_HOST}/id${data.code}`;
+            document.getElementById('finalUrl').innerText = link;
+            document.getElementById('resultArea').classList.remove('d-none');
+        } catch (e) {
+            // 忽略
+        } finally {
+            btn.disabled = false;
+            btn.innerText = "生成链接";
+        }
+    }
+
+    // 3. 查询设备
+    async function queryDevice() {
+        const devId = document.getElementById('query_dev_id').value.trim();
+        if (!devId) return alert("请输入 Device ID");
+
+        try {
+            const data = await safeFetch(`/admin/list-device?deviceId=${encodeURIComponent(devId)}`);
+            const out = document.getElementById('deviceOutput');
+            out.classList.remove('d-none');
+            out.innerText = JSON.stringify(data, null, 2);
+        } catch (e) {}
+    }
+
+    // 4. 删除 Token
+    async function deleteToken() {
+        const token = document.getElementById('del_token').value.trim();
+        if (!token) return alert("请输入 Token");
+        if (!confirm("确认删除此 Token 吗？")) return;
+
+        try {
+            await safeFetch('/admin/remove-token', {
+                method: 'POST',
+                body: JSON.stringify({ token })
+            });
+            alert("✅ 删除成功");
+            document.getElementById('del_token').value = "";
+        } catch (e) {}
+    }
+
+    function copyUrl() {
+        const text = document.getElementById('finalUrl').innerText;
+        navigator.clipboard.writeText(text);
+        alert("已复制");
+    }
 </script>
-
 </body>
 </html>
+
+
